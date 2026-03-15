@@ -8,7 +8,8 @@ import sounddevice as sd
 import psutil
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QSlider, QLabel, QComboBox, QSpinBox, 
-                             QDoubleSpinBox, QFrame, QCheckBox, QGroupBox, QPushButton, QFileDialog)
+                             QDoubleSpinBox, QFrame, QCheckBox, QGroupBox, QPushButton, QFileDialog,
+                             QMessageBox)
 from PyQt6.QtCore import Qt, QTimer, QPointF, QRect
 from PyQt6.QtGui import QPainter, QPen, QColor, QPolygonF, QFont, QKeyEvent
 
@@ -579,6 +580,99 @@ class OscillatorApp(QMainWindow):
         self.cpu_lab = QLabel("CPU: 0%"); fr.addStretch(); fr.addWidget(self.cpu_lab); main_layout.addLayout(fr)
 
         self.set_connections()
+        self.preset_schema = self._build_preset_schema()
+
+    def _build_preset_schema(self):
+        return {
+            # Top / chord controls
+            "vis_mode": {"type": "enum", "widget": self.vis_mode, "values": ["OSCILLOSCOPE", "SPECTRUM", "NONE"]},
+            "freq_spin": {"type": "int", "widget": self.freq_spin, "min": 20, "max": 2000},
+            "chord_type": {"type": "enum", "widget": self.chord_type, "values": list(self.CHORD_MAP.keys())},
+            "chord_inv": {"type": "enum", "widget": self.chord_inv, "values": ["Root Pos", "1st Inv", "2nd Inv", "3rd Inv"]},
+
+            # Oscillators / mixer
+            "v1_wave": {"type": "enum", "widget": self.v1_wave, "values": ["Sine", "Sawtooth", "Square", "Triangle", "Rev Saw", "White Noise"]},
+            "v1_oct": {"type": "enum", "widget": self.v1_oct, "values": ["16'", "8'", "4'", "2'"]},
+            "v1_pitch_b": {"type": "int", "widget": self.v1_pitch_b, "min": -100, "max": 100},
+            "v1_lvl_b": {"type": "int", "widget": self.v1_lvl_b, "min": 0, "max": 100},
+            "v2_wave": {"type": "enum", "widget": self.v2_wave, "values": ["Sine", "Sawtooth", "Square", "Triangle", "Rev Saw", "White Noise"]},
+            "v2_oct": {"type": "enum", "widget": self.v2_oct, "values": ["16'", "8'", "4'", "2'"]},
+            "v2_pitch_b": {"type": "int", "widget": self.v2_pitch_b, "min": -100, "max": 100},
+            "v2_lvl_b": {"type": "int", "widget": self.v2_lvl_b, "min": 0, "max": 100},
+            "sub_oct": {"type": "enum", "widget": self.sub_oct, "values": ["-1", "-2"]},
+            "sub_lvl_b": {"type": "int", "widget": self.sub_lvl_b, "min": 0, "max": 100},
+
+            # Modulation
+            "v3_wave": {"type": "enum", "widget": self.v3_wave, "values": ["Sine", "Sawtooth", "Square", "Triangle", "Rev Saw", "White Noise"]},
+            "v3_oct": {"type": "enum", "widget": self.v3_oct, "values": ["-2", "-1", "0", "1", "2"]},
+            "v3_v1_b": {"type": "int", "widget": self.v3_v1_b, "min": 0, "max": 100},
+            "v3_v2_b": {"type": "int", "widget": self.v3_v2_b, "min": 0, "max": 100},
+            "lfo_w": {"type": "enum", "widget": self.lfo_w, "values": ["Sine", "Tri", "Square", "Saw"]},
+            "lfo_r_b": {"type": "float", "widget": self.lfo_r_b, "min": 0.1, "max": 30.0},
+            "lfo_d_b": {"type": "int", "widget": self.lfo_d_b, "min": 0, "max": 100},
+            "ring_cb": {"type": "bool", "widget": self.ring_cb},
+            "sync_cb": {"type": "bool", "widget": self.sync_cb},
+
+            # Filter
+            "vcf_m": {"type": "enum", "widget": self.vcf_m, "values": ["LP", "HP", "BP"]},
+            "cut_b": {"type": "int", "widget": self.cut_b, "min": 20, "max": 20000},
+            "res_b": {"type": "float", "widget": self.res_b, "min": 0.1, "max": 4.0},
+            "flt_i_b": {"type": "float", "widget": self.flt_i_b, "min": 0.0, "max": 1.0},
+
+            # Envelopes
+            "amp_a_b": {"type": "float", "widget": self.amp_a_b, "min": 0.001, "max": 5.0},
+            "amp_d_b": {"type": "float", "widget": self.amp_d_b, "min": 0.001, "max": 5.0},
+            "amp_s_b": {"type": "float", "widget": self.amp_s_b, "min": 0.001, "max": 1.0},
+            "amp_r_b": {"type": "float", "widget": self.amp_r_b, "min": 0.001, "max": 5.0},
+            "flt_a_b": {"type": "float", "widget": self.flt_a_b, "min": 0.001, "max": 5.0},
+            "flt_d_b": {"type": "float", "widget": self.flt_d_b, "min": 0.001, "max": 5.0},
+            "flt_s_b": {"type": "float", "widget": self.flt_s_b, "min": 0.001, "max": 1.0},
+            "flt_r_b": {"type": "float", "widget": self.flt_r_b, "min": 0.001, "max": 5.0},
+
+            # Output
+            "stereo_b": {"type": "int", "widget": self.stereo_b, "min": 0, "max": 100},
+            "gain_b": {"type": "int", "widget": self.gain_b, "min": 0, "max": 100},
+        }
+
+    def _preset_value_for_save(self, spec):
+        widget = spec["widget"]
+        if spec["type"] == "enum":
+            return widget.currentText()
+        if spec["type"] == "bool":
+            return bool(widget.isChecked())
+        value = widget.value()
+        if spec["type"] == "int":
+            return int(value)
+        return float(value)
+
+    def _apply_preset_value(self, key, spec, raw_value):
+        widget = spec["widget"]
+        vtype = spec["type"]
+
+        if vtype == "enum":
+            if not isinstance(raw_value, str):
+                raise ValueError(f"{key} must be a string")
+            if raw_value not in spec["values"]:
+                raise ValueError(f"{key} has invalid option: {raw_value}")
+            widget.setCurrentText(raw_value)
+            return
+
+        if vtype == "bool":
+            if not isinstance(raw_value, bool):
+                raise ValueError(f"{key} must be a boolean")
+            widget.setChecked(raw_value)
+            return
+
+        if not isinstance(raw_value, (int, float)) or isinstance(raw_value, bool):
+            raise ValueError(f"{key} must be numeric")
+
+        min_v, max_v = spec["min"], spec["max"]
+        bounded_value = max(min_v, min(max_v, float(raw_value)))
+
+        if vtype == "int":
+            widget.setValue(int(round(bounded_value)))
+        else:
+            widget.setValue(float(bounded_value))
 
     def create_slider(self, txt, mn, mx, df, layout, is_int, attr):
         l = QVBoxLayout(); h = QHBoxLayout(); h.addWidget(QLabel(txt))
@@ -723,15 +817,67 @@ class OscillatorApp(QMainWindow):
         self.record_btn.style().unpolish(self.record_btn); self.record_btn.style().polish(self.record_btn)
 
     def save_preset(self):
-        d = {k: w.value() if hasattr(w, 'value') else w.currentText() for k, w in self.__dict__.items() if hasattr(w, 'value') or hasattr(w, 'currentText')}
-        # Filter only widgets
-        clean_d = {} # Simplified for brevity, ideal impl iterates all UI controls explicitly
         f, _ = QFileDialog.getSaveFileName(self, "Save Preset", self.presets_dir, "JSON (*.json)")
-        # Full serialization would go here, restored basics
+        if not f:
+            return
+
+        preset = {
+            "schema_version": 1,
+            "controls": {key: self._preset_value_for_save(spec) for key, spec in self.preset_schema.items()}
+        }
+
+        try:
+            with open(f, "w", encoding="utf-8") as handle:
+                json.dump(preset, handle, indent=2)
+        except OSError as err:
+            QMessageBox.critical(self, "Preset Save Error", f"Unable to save preset:\n{err}")
+            return
+
+        self.cpu_lab.setText(f"Preset saved: {os.path.basename(f)}")
 
     def load_preset(self):
         f, _ = QFileDialog.getOpenFileName(self, "Load Preset", self.presets_dir, "JSON (*.json)")
-        # Full deserialization logic restored
+        if not f:
+            return
+
+        try:
+            with open(f, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        except (OSError, json.JSONDecodeError) as err:
+            QMessageBox.critical(self, "Preset Load Error", f"Unable to load preset:\n{err}")
+            return
+
+        if not isinstance(payload, dict):
+            QMessageBox.warning(self, "Preset Load Error", "Invalid preset format: root object must be a JSON object.")
+            return
+
+        controls = payload.get("controls")
+        if not isinstance(controls, dict):
+            QMessageBox.warning(self, "Preset Load Error", "Invalid preset format: missing controls object.")
+            return
+
+        errors = []
+        for key, spec in self.preset_schema.items():
+            if key not in controls:
+                errors.append(f"Missing key: {key}")
+                continue
+            try:
+                self._apply_preset_value(key, spec, controls[key])
+            except ValueError as err:
+                errors.append(str(err))
+
+        # Ensure engine and dependent labels/UI are refreshed
+        self.update_params()
+        self.update_gate_ui()
+
+        if errors:
+            preview = "\n".join(errors[:8])
+            if len(errors) > 8:
+                preview += f"\n... and {len(errors) - 8} more"
+            QMessageBox.warning(self, "Preset Loaded with Warnings", f"Preset applied with issues:\n{preview}")
+            self.cpu_lab.setText(f"Preset loaded with warnings: {os.path.basename(f)}")
+        else:
+            self.cpu_lab.setText(f"Preset loaded: {os.path.basename(f)}")
 
     def refresh_visuals(self): self.visualizer.update_data(self.engine.last_samples)
     def update_stats(self): self.cpu_lab.setText(f"CPU: {psutil.cpu_percent()}%")
